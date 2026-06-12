@@ -1,0 +1,78 @@
+[package]
+name = "yplayer"
+version = "0.1.0"
+edition = "2021"
+authors = ["yplayer contributors"]
+description = "Console music player for Yandex Music"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourname/yplayer"
+readme = "README.md"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.38", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# TUI
+ratatui = { version = "0.27", features = ["crossterm"] }
+crossterm = { version = "0.27", features = ["event-stream"] }
+
+# Audio - libmpv direct bindings
+libmpv-sys = "3.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Config directories
+dirs = "5.0"
+
+# Utilities
+anyhow = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+url = "2.5"
+
+# Random (for shuffle)
+fastrand = "2.0"
+
+# Async utilities
+futures = "0.3"
+tokio-stream = "0.1"
+
+# Terminal image support (optional)
+ratatui-image = { version = "0.2", optional = true, features = ["sixel"] }
+
+# Clipboard support
+arboard = "3.5"
+
+# Open URLs in browser
+open = "5.3"
+
+# XML parsing (for download info response)
+quick-xml = "0.37"
+
+# MD5 for download URL construction
+md-5 = "0.10"
+
+[features]
+default = []
+image = ["ratatui-image"]
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-cpu=apple-m1"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-cpu=native"]

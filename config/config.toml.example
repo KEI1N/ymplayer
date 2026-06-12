@@ -1,0 +1,18 @@
+[player]
+volume = 80
+default_quality = "flac"
+crossfade_ms = 0
+
+[ui]
+theme = "dark"
+show_cover_art = true
+cover_art_protocol = "sixel"
+vim_keybindings = true
+language = "ru"
+
+[auth]
+auto_login = true
+token_path = "~/.config/yplayer/token.json"
+
+[mpv]
+extra_args = ["--no-video", "--msg-level=all=warn", "--force-seekable=yes"]

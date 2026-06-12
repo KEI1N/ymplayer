@@ -1,0 +1,23 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Config (generated)
+config.toml
+yplayer.toml
+
+# Cache
+.cache/
+
+# Logs
+*.log
