@@ -50,6 +50,9 @@ async fn main() -> Result<()> {
     // Search responses arrive here from spawned tasks, tagged with the
     // request generation so stale responses can be dropped.
     let (search_tx, mut search_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Vec<YTrack>)>();
+    // Listening history is fetched once, in the background, on first entry
+    // into the History view.
+    let (history_tx, mut history_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<YTrack>>();
 
     let mut events = EventStream::new();
     let tick_rate = tokio::time::Duration::from_millis(500);
@@ -82,7 +85,7 @@ async fn main() -> Result<()> {
                 match event {
                     Some(Ok(Event::Key(key))) => {
                         if let Some(action) = Action::from_key(key, true) {
-                            if handle_action(&mut app, &player, &client, &config, &search_tx, action).await? == false {
+                            if handle_action(&mut app, &player, &client, &config, &search_tx, &history_tx, action).await? == false {
                                 break;
                             }
                             needs_redraw = true;
@@ -102,6 +105,11 @@ async fn main() -> Result<()> {
                     }
                     needs_redraw = true;
                 }
+            }
+            Some(tracks) = history_rx.recv() => {
+                app.history = tracks;
+                app.history_loaded = true;
+                needs_redraw = true;
             }
             _ = ticker.tick() => {
                 needs_redraw = true;
@@ -160,12 +168,31 @@ async fn authenticate(config: &Config) -> Result<(YandexClient, String)> {
     Ok((client, token))
 }
 
+/// Kick off a one-time background fetch of listening history when the
+/// History view becomes active; the result arrives via `history_tx`.
+fn maybe_load_history(
+    app: &mut AppState,
+    client: &YandexClient,
+    history_tx: &tokio::sync::mpsc::UnboundedSender<Vec<YTrack>>,
+) {
+    if app.library_view == LibraryView::History && !app.history_loaded && !app.history_loading {
+        app.history_loading = true;
+        let client = client.clone();
+        let tx = history_tx.clone();
+        tokio::spawn(async move {
+            let tracks = client.get_history(100).await.unwrap_or_default();
+            let _ = tx.send(tracks);
+        });
+    }
+}
+
 async fn handle_action(
     app: &mut AppState,
     player: &Player,
     client: &YandexClient,
     config: &Config,
     search_tx: &tokio::sync::mpsc::UnboundedSender<(u64, Vec<YTrack>)>,
+    history_tx: &tokio::sync::mpsc::UnboundedSender<Vec<YTrack>>,
     action: Action,
 ) -> Result<bool> {
     // ── Search mode: capture input ──
@@ -341,6 +368,7 @@ async fn handle_action(
                                 app.library_view = view;
                                 app.selected_index = 0;
                                 app.focus = Focus::Content;
+                                maybe_load_history(app, client, history_tx);
                             }
                         }
                         Focus::Content => {
@@ -389,6 +417,7 @@ async fn handle_action(
             app.selected_index = 0;
             app.sidebar_selected = next;
             app.focus = Focus::Sidebar;
+            maybe_load_history(app, client, history_tx);
         }
 
         Action::BackTab => {
@@ -399,6 +428,7 @@ async fn handle_action(
             app.selected_index = 0;
             app.sidebar_selected = prev;
             app.focus = Focus::Sidebar;
+            maybe_load_history(app, client, history_tx);
         }
 
         Action::PlayPause => {

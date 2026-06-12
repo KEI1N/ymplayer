@@ -24,6 +24,10 @@ pub struct AppState {
     pub library_view: LibraryView,
     pub liked_tracks: Vec<YTrack>,
     pub playlists: Vec<YPlaylist>,
+    pub history: Vec<YTrack>,
+    /// История загружается лениво при первом входе во вкладку.
+    pub history_loaded: bool,
+    pub history_loading: bool,
     pub current_playlist: Option<YPlaylist>,
     pub search_query: String,
     pub search_results: Vec<YTrack>,
@@ -43,6 +47,9 @@ impl Default for AppState {
             library_view: LibraryView::LikedTracks,
             liked_tracks: vec![],
             playlists: vec![],
+            history: vec![],
+            history_loaded: false,
+            history_loading: false,
             current_playlist: None,
             search_query: String::new(),
             search_results: vec![],
@@ -64,7 +71,7 @@ impl AppState {
         match self.library_view {
             LibraryView::LikedTracks => &self.liked_tracks,
             LibraryView::Playlists => self.current_playlist.as_ref().map(|p| p.tracks.as_slice()).unwrap_or(&[]),
-            _ => &[],
+            LibraryView::History => &self.history,
         }
     }
 

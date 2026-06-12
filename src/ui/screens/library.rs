@@ -47,10 +47,14 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &AppState) {
         LibraryView::Playlists => {
             draw_playlist_list(frame, area, &app.playlists, "Плейлисты", app.selected_index, app.focus == Focus::Content);
         }
-        _ => {
-            let p = Paragraph::new("Скоро")
-                .block(Block::default().borders(Borders::ALL).title("Содержимое"));
-            frame.render_widget(p, area);
+        LibraryView::History => {
+            if app.history_loaded {
+                draw_track_list(frame, area, &app.history, "История", app.selected_index, app.focus == Focus::Content);
+            } else {
+                let p = Paragraph::new(" Загрузка истории...")
+                    .block(Block::default().borders(Borders::ALL).title("История"));
+                frame.render_widget(p, area);
+            }
         }
     }
 }
