@@ -8,12 +8,11 @@ mod utils;
 
 use crate::api::auth::AuthFlow;
 use crate::api::client::YandexClient;
-use crate::api::models::LibraryView;
+use crate::api::models::{LibraryView, YTrack};
 use crate::app::config::{Config, TokenData};
 use crate::app::keybindings::Action;
 use crate::app::state::{AppState, Focus, Screen};
 use crate::player::Player;
-use crate::ui::theme::Theme;
 use crate::utils::Result;
 use crossterm::event::{Event, EventStream};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
@@ -35,24 +34,22 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let _theme = Theme::dark();
     let player = Player::new(&token)?;
     let mut app = AppState::new();
 
-    match client.get_liked_tracks(0, 50).await {
-        Ok(tracks) => {
-            app.liked_tracks = tracks;
-        }
-        Err(e) => {
-            let _ = terminal.draw(|_f| {});
-            eprintln!("Ошибка загрузки: {e}");
-        }
+    let (liked, playlists) = tokio::join!(client.get_liked_tracks(0, 50), client.get_playlists());
+    match liked {
+        Ok(tracks) => app.liked_tracks = tracks,
+        Err(e) => eprintln!("Ошибка загрузки: {e}"),
     }
-
-    match client.get_playlists().await {
+    match playlists {
         Ok(playlists) => app.playlists = playlists,
         Err(e) => eprintln!("Ошибка загрузки плейлистов: {e}"),
     }
+
+    // Search responses arrive here from spawned tasks, tagged with the
+    // request generation so stale responses can be dropped.
+    let (search_tx, mut search_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Vec<YTrack>)>();
 
     let mut events = EventStream::new();
     let tick_rate = tokio::time::Duration::from_millis(500);
@@ -85,7 +82,7 @@ async fn main() -> Result<()> {
                 match event {
                     Some(Ok(Event::Key(key))) => {
                         if let Some(action) = Action::from_key(key, true) {
-                            if handle_action(&mut app, &player, &client, &config, action).await? == false {
+                            if handle_action(&mut app, &player, &client, &config, &search_tx, action).await? == false {
                                 break;
                             }
                             needs_redraw = true;
@@ -95,6 +92,15 @@ async fn main() -> Result<()> {
                         needs_redraw = true;
                     }
                     _ => {}
+                }
+            }
+            Some((seq, tracks)) = search_rx.recv() => {
+                if seq == app.search_seq && app.screen == Screen::Search {
+                    app.search_results = tracks;
+                    if app.selected_index >= app.search_results.len() {
+                        app.selected_index = 0;
+                    }
+                    needs_redraw = true;
                 }
             }
             _ = ticker.tick() => {
@@ -159,6 +165,7 @@ async fn handle_action(
     player: &Player,
     client: &YandexClient,
     config: &Config,
+    search_tx: &tokio::sync::mpsc::UnboundedSender<(u64, Vec<YTrack>)>,
     action: Action,
 ) -> Result<bool> {
     // ── Search mode: capture input ──
@@ -167,12 +174,14 @@ async fn handle_action(
             Action::Escape => {
                 app.screen = Screen::Library;
                 app.search_query.clear();
+                app.search_seq += 1;
                 app.selected_index = 0;
                 return Ok(true);
             }
             Action::GoBack => {
                 if app.search_query.is_empty() {
                     app.screen = Screen::Library;
+                    app.search_seq += 1;
                     app.selected_index = 0;
                     return Ok(true);
                 } else {
@@ -189,6 +198,7 @@ async fn handle_action(
                 }
                 app.screen = Screen::Library;
                 app.search_query.clear();
+                app.search_seq += 1;
                 app.selected_index = 0;
                 return Ok(true);
             }
@@ -212,19 +222,22 @@ async fn handle_action(
             }
             _ => return Ok(true),
         }
-        // Trigger search on every keystroke
-        if !app.search_query.is_empty() {
-            match client.search(&app.search_query, "track", 0).await {
-                Ok(results) => {
-                    app.search_results = results.tracks;
-                    if app.selected_index >= app.search_results.len() {
-                        app.selected_index = 0;
-                    }
-                }
-                Err(e) => eprintln!("Ошибка поиска: {e}"),
-            }
-        } else {
+        // The query changed: fire the search in the background so typing
+        // never blocks the event loop; the result arrives via search_tx
+        // and is dropped if a newer request superseded it.
+        app.search_seq += 1;
+        if app.search_query.is_empty() {
             app.search_results.clear();
+        } else {
+            let seq = app.search_seq;
+            let query = app.search_query.clone();
+            let client = client.clone();
+            let tx = search_tx.clone();
+            tokio::spawn(async move {
+                if let Ok(results) = client.search(&query, "track", 0).await {
+                    let _ = tx.send((seq, results.tracks));
+                }
+            });
         }
         return Ok(true);
     }
@@ -276,7 +289,7 @@ async fn handle_action(
                             }
                         }
                         Focus::Content => {
-                            let max = app.current_tracks().len();
+                            let max = app.content_len();
                             if max > 0 && app.selected_index + 1 < max {
                                 app.selected_index += 1;
                             }
@@ -470,39 +483,19 @@ async fn handle_action(
         }
 
         Action::ScrollDown => {
-            match app.screen {
-                Screen::PlaylistDetail(_) => {
-                    app.scroll_offset += 1;
-                }
-                _ => app.scroll_offset += 1,
-            }
+            app.scroll_offset = (app.scroll_offset + 1).min(app.max_scroll());
         }
 
         Action::ScrollUp => {
-            match app.screen {
-                Screen::PlaylistDetail(_) => {
-                    app.scroll_offset = app.scroll_offset.saturating_sub(1);
-                }
-                _ => app.scroll_offset = app.scroll_offset.saturating_sub(1),
-            }
+            app.scroll_offset = app.scroll_offset.saturating_sub(1);
         }
 
         Action::PageDown => {
-            match app.screen {
-                Screen::PlaylistDetail(_) => {
-                    app.scroll_offset += 10;
-                }
-                _ => app.scroll_offset += 10,
-            }
+            app.scroll_offset = (app.scroll_offset + 10).min(app.max_scroll());
         }
 
         Action::PageUp => {
-            match app.screen {
-                Screen::PlaylistDetail(_) => {
-                    app.scroll_offset = app.scroll_offset.saturating_sub(10);
-                }
-                _ => app.scroll_offset = app.scroll_offset.saturating_sub(10),
-            }
+            app.scroll_offset = app.scroll_offset.saturating_sub(10);
         }
 
         _ => {}

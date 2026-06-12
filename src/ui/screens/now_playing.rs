@@ -28,11 +28,13 @@ pub fn draw(frame: &mut Frame, area: Rect, _app: &AppState, player: &Player) {
 
     let playing = player.is_playing();
     let icon = if playing { "▶" } else { "⏸" };
-    let pos = player.time_pos().unwrap_or(0.0);
-    let dur = player.duration().unwrap_or(0.0);
-    let pos_fmt = format!("{:02}:{:02}", (pos as u32) / 60, (pos as u32) % 60);
-    let dur_fmt = format!("{:02}:{:02}", (dur as u32) / 60, (dur as u32) % 60);
-    let label_str = format!(" {}  {} / {}  Vol: {}% {} ", icon, pos_fmt, dur_fmt, player.volume(), vol_bar(player.volume()));
+    let pos_fmt = crate::utils::format_time_secs(player.time_pos().unwrap_or(0.0));
+    let dur_fmt = crate::utils::format_time_secs(player.duration().unwrap_or(0.0));
+    let label_str = format!(
+        " {}  {} / {}  Vol: {}% {} ",
+        icon, pos_fmt, dur_fmt, player.volume(),
+        crate::utils::volume_bar(player.volume(), 10)
+    );
 
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::ALL))
@@ -40,10 +42,4 @@ pub fn draw(frame: &mut Frame, area: Rect, _app: &AppState, player: &Player) {
         .percent(player.progress_pct() as u16)
         .label(label_str);
     frame.render_widget(gauge, chunks[1]);
-}
-
-fn vol_bar(vol: u8) -> String {
-    let filled = vol / 10;
-    let empty = 10 - filled;
-    format!("{}{}", "█".repeat(filled as usize), "░".repeat(empty as usize))
 }

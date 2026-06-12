@@ -19,7 +19,13 @@ impl TrackCache {
     }
 
     pub fn path(&self, track_id: &str) -> PathBuf {
-        self.dir.join(format!("{track_id}.mp3"))
+        // Track ids come from API responses; keep only filename-safe
+        // characters so an id can't escape the cache dir via ".." or "/".
+        let safe: String = track_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            .collect();
+        self.dir.join(format!("{safe}.mp3"))
     }
 
     pub fn has(&self, track_id: &str) -> bool {
@@ -46,16 +52,5 @@ impl TrackCache {
                 .map_err(|e| YPlayerError::Io(e))?;
         }
         Ok(())
-    }
-
-    pub fn count(&self) -> usize {
-        std::fs::read_dir(&self.dir)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("mp3"))
-                    .count()
-            })
-            .unwrap_or(0)
     }
 }

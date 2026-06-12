@@ -200,7 +200,7 @@ impl YandexClient {
             .unwrap_or_default();
 
         Ok(YAlbum {
-            id: resp["id"].as_i64().map(|i| i.to_string()).unwrap_or_default(),
+            id: parse_id(&resp["id"]).unwrap_or_default(),
             title: resp["title"].as_str().unwrap_or("").to_string(),
             artists: parse_artists(resp["artists"].as_array()),
             cover_uri: resp["cover_uri"].as_str().map(String::from),
@@ -243,7 +243,7 @@ impl YandexClient {
             albums: resp["albums"]["results"]
                 .as_array().map(|a| a.iter().filter_map(|a| {
                     Some(YAlbum {
-                        id: a["id"].as_i64().map(|i| i.to_string()).unwrap_or_default(),
+                        id: parse_id(&a["id"]).unwrap_or_default(),
                         title: a["title"].as_str()?.to_string(),
                         artists: parse_artists(a["artists"].as_array()),
                         cover_uri: a["cover_uri"].as_str().map(String::from),
@@ -417,12 +417,16 @@ impl YandexClient {
     }
 }
 
-fn parse_track(t: &serde_json::Value, liked: bool, position: Option<u64>) -> Option<YTrack> {
-    let id = t["id"]
-        .as_i64()
+/// Yandex ids arrive either as numbers or strings depending on endpoint.
+fn parse_id(v: &serde_json::Value) -> Option<String> {
+    v.as_i64()
         .map(|i| i.to_string())
-        .or_else(|| t["id"].as_str().map(String::from))
-        .unwrap_or_default();
+        .or_else(|| v.as_str().map(String::from))
+}
+
+fn parse_track(t: &serde_json::Value, liked: bool, position: Option<u64>) -> Option<YTrack> {
+    // A track without an id can't be downloaded or cached — skip it.
+    let id = parse_id(&t["id"])?;
     Some(YTrack {
         id,
         title: t["title"].as_str()?.to_string(),
@@ -449,13 +453,8 @@ fn parse_artists(arr: Option<&Vec<serde_json::Value>>) -> Vec<YArtist> {
 }
 
 fn parse_artist(a: &serde_json::Value) -> Option<YArtist> {
-    let id = a["id"]
-        .as_i64()
-        .map(|i| i.to_string())
-        .or_else(|| a["id"].as_str().map(String::from))
-        .unwrap_or_default();
     Some(YArtist {
-        id,
+        id: parse_id(&a["id"]).unwrap_or_default(),
         name: a["name"].as_str()?.to_string(),
         cover_uri: a["cover"]["uri"].as_str().map(String::from),
         genres: a["genres"].as_array().map(|g| {
@@ -468,13 +467,8 @@ fn parse_artist(a: &serde_json::Value) -> Option<YArtist> {
 }
 
 fn parse_album(a: &serde_json::Value) -> Option<YAlbum> {
-    let id = a["id"]
-        .as_i64()
-        .map(|i| i.to_string())
-        .or_else(|| a["id"].as_str().map(String::from))
-        .unwrap_or_default();
     Some(YAlbum {
-        id,
+        id: parse_id(&a["id"]).unwrap_or_default(),
         title: a["title"].as_str()?.to_string(),
         artists: parse_artists(a["artists"].as_array()),
         cover_uri: a["cover_uri"].as_str().map(String::from),
