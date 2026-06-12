@@ -9,33 +9,16 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact_name: yplayer-x86_64-apple-darwin
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            artifact_name: yplayer-aarch64-apple-darwin
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact_name: yplayer-x86_64-unknown-linux-gnu
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            artifact_name: yplayer-x86_64-pc-windows-msvc.exe
-
+  build-macos-arm:
+    name: Build aarch64-apple-darwin
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -46,57 +29,29 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            macos-cargo-
 
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
+      - name: Install dependencies
         run: |
           brew install mpv pkg-config
 
-      - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libmpv-dev pkg-config libssl-dev
-
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install mpv pkg-configll -y
-          echo "C:/Program Files/mpv" >> $GITHUB_PATH
-
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target aarch64-apple-darwin
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
-          if-no-files-found: error
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Create checksums
+      - name: Prepare release artifact
         run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/yplayer dist/yplayer-aarch64-apple-darwin
           cd dist
-          sha256sum * > checksums.txt
+          sha256sum yplayer-aarch64-apple-darwin > checksums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*
+            dist/yplayer-aarch64-apple-darwin
+            dist/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
