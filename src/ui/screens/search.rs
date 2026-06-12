@@ -1,5 +1,6 @@
 use crate::app::state::AppState;
 use crate::api::models::YTrack;
+use crate::ui::components::list::track_line;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
@@ -40,26 +41,7 @@ fn draw_results<'a>(tracks: &'a [YTrack], selected: usize) -> Vec<Line<'a>> {
             .style(Style::default().add_modifier(Modifier::BOLD)),
     );
     for (i, t) in tracks.iter().enumerate() {
-        let prefix = if i == selected { "▸ " } else { "  " };
-        let style = if i == selected {
-            Style::default()
-                .fg(Color::Rgb(220, 220, 220))
-                .bg(Color::Rgb(60, 60, 120))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        lines.push(
-            Line::from(format!(
-                "{}{:>3}. {} — {} [{}]",
-                prefix,
-                i + 1,
-                t.artists_str(),
-                t.title,
-                t.duration_str()
-            ))
-            .style(style),
-        );
+        lines.push(track_line(i, t, i == selected, true));
     }
     lines
 }

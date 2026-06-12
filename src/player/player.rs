@@ -102,10 +102,6 @@ impl Player {
         self.play_track(track, &path_str)
     }
 
-    pub fn cache_info(&self) -> String {
-        format!("{} треков", self.cache.count())
-    }
-
     pub fn clear_cache(&self) -> Result<()> {
         self.cache.clear()
     }

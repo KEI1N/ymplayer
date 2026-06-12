@@ -21,6 +21,18 @@ pub fn format_duration_long(ms: u32) -> String {
     }
 }
 
+/// Format a playback position in seconds (as reported by mpv) as mm:ss.
+pub fn format_time_secs(secs: f64) -> String {
+    let s = secs.max(0.0) as u32;
+    format!("{:02}:{:02}", s / 60, s % 60)
+}
+
+/// Volume bar like "███░░░░░░░", `width` cells wide, for a 0–100 volume.
+pub fn volume_bar(vol: u8, width: usize) -> String {
+    let filled = (vol.min(100) as usize * width) / 100;
+    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+}
+
 pub fn format_progress(current_ms: u32, total_ms: u32, width: u16) -> String {
     if total_ms == 0 {
         return "─".repeat(width as usize);

@@ -111,7 +111,17 @@ impl PlaybackQueue {
             if self.shuffle_position + 1 >= self.shuffle_order.len() {
                 match self.repeat {
                     RepeatMode::All => {
+                        // Wrap around into a fresh order, starting from its
+                        // first track rather than the one that just finished
+                        // (regenerate leaves shuffle_position on the current track).
                         self.regenerate_shuffle_order();
+                        self.shuffle_position = 0;
+                        if self.shuffle_order.first() == Some(&self.current_index)
+                            && self.shuffle_order.len() > 1
+                        {
+                            let last = self.shuffle_order.len() - 1;
+                            self.shuffle_order.swap(0, last);
+                        }
                     }
                     RepeatMode::One => {}
                     RepeatMode::Off => return None,

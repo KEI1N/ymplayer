@@ -39,17 +39,12 @@ pub fn draw(frame: &mut Frame, area: Rect, _app: &AppState, player: &Player) {
     let p1 = Paragraph::new(line1).style(Style::default().fg(Color::White));
     frame.render_widget(p1, chunks[0]);
 
-    let vol_filled = (vol / 5).min(20) as usize;
-    let vol_bar = "█".repeat(vol_filled);
-    let vol_empty = "░".repeat(20 - vol_filled);
-    let vol_display = format!(" Vol: {:>3}% [{}{}] ", vol, vol_bar, vol_empty);
+    let vol_display = format!(" Vol: {:>3}% [{}] ", vol, crate::utils::volume_bar(vol, 20));
 
     let time_str = format!(
-        "{:02}:{:02} / {:02}:{:02}",
-        (time_pos as u32) / 60,
-        (time_pos as u32) % 60,
-        (duration as u32) / 60,
-        (duration as u32) % 60
+        "{} / {}",
+        crate::utils::format_time_secs(time_pos),
+        crate::utils::format_time_secs(duration)
     );
 
     let progress_gauge = Gauge::default()

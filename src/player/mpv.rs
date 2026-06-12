@@ -35,11 +35,7 @@ impl MpvPlayer {
 
         let ret = unsafe { libmpv_sys::mpv_initialize(ctx) };
         if ret < 0 {
-            let err = unsafe {
-                let ptr = libmpv_sys::mpv_error_string(ret);
-                CStr::from_ptr(ptr).to_string_lossy().into_owned()
-            };
-            return Err(YPlayerError::Mpv(format!("mpv_initialize: {err}")));
+            return Err(YPlayerError::Mpv(format!("mpv_initialize: {}", error_string(ret))));
         }
 
         Ok(Self {
@@ -48,31 +44,26 @@ impl MpvPlayer {
         })
     }
 
-    pub fn load(&self, url: &str) -> Result<()> {
-        let cmd = CString::new("loadfile").map_err(|_| YPlayerError::Mpv("Invalid cmd".into()))?;
-        let url_c = CString::new(url).map_err(|_| YPlayerError::Mpv("Invalid URL".into()))?;
-        let mode_c = CString::new("replace").map_err(|_| YPlayerError::Mpv("Invalid mode".into()))?;
+    /// Run an mpv command given as ["name", arg, ...].
+    fn command(&self, args: &[&str]) -> Result<()> {
+        let name = args.first().copied().unwrap_or("");
+        let cstrs = args
+            .iter()
+            .map(|a| CString::new(*a).map_err(|_| YPlayerError::Mpv(format!("{name}: invalid argument"))))
+            .collect::<Result<Vec<_>>>()?;
+        let mut ptrs: Vec<*const std::os::raw::c_char> =
+            cstrs.iter().map(|c| c.as_ptr()).collect();
+        ptrs.push(std::ptr::null());
 
-        let mut args: [*const std::os::raw::c_char; 4] = [
-            cmd.as_ptr(),
-            url_c.as_ptr(),
-            mode_c.as_ptr(),
-            std::ptr::null(),
-        ];
-
-        let ret = unsafe {
-            libmpv_sys::mpv_command(self.ctx, args.as_mut_ptr())
-        };
-
+        let ret = unsafe { libmpv_sys::mpv_command(self.ctx, ptrs.as_mut_ptr()) };
         if ret < 0 {
-            let err = unsafe {
-                let ptr = libmpv_sys::mpv_error_string(ret);
-                CStr::from_ptr(ptr).to_string_lossy().into_owned()
-            };
-            return Err(YPlayerError::Mpv(format!("loadfile: {err}")));
+            return Err(YPlayerError::Mpv(format!("{name}: {}", error_string(ret))));
         }
-
         Ok(())
+    }
+
+    pub fn load(&self, url: &str) -> Result<()> {
+        self.command(&["loadfile", url, "replace"])
     }
 
     pub fn play(&self) -> Result<()> {
@@ -94,15 +85,7 @@ impl MpvPlayer {
     }
 
     pub fn stop(&self) -> Result<()> {
-        let cmd_c = CString::new("stop").map_err(|_| YPlayerError::Mpv("Invalid cmd".into()))?;
-        let mut args: [*const std::os::raw::c_char; 2] = [cmd_c.as_ptr(), std::ptr::null()];
-
-        let ret = unsafe { libmpv_sys::mpv_command(self.ctx, args.as_mut_ptr()) };
-        if ret < 0 {
-            let err = unsafe { CStr::from_ptr(libmpv_sys::mpv_error_string(ret)).to_string_lossy().into_owned() };
-            return Err(YPlayerError::Mpv(format!("stop: {err}")));
-        }
-        Ok(())
+        self.command(&["stop"])
     }
 
     pub fn volume(&self) -> u8 {
@@ -124,25 +107,8 @@ impl MpvPlayer {
     }
 
     pub fn seek(&self, secs: f64) -> Result<()> {
-        let cmd_name = CString::new("seek").map_err(|_| YPlayerError::Mpv("Invalid cmd".into()))?;
         let rel = if secs >= 0.0 { "+" } else { "" };
-        let val = format!("{}{}", rel, secs);
-        let val_c = CString::new(val).map_err(|_| YPlayerError::Mpv("Invalid seek value".into()))?;
-        let mode_c = CString::new("relative").map_err(|_| YPlayerError::Mpv("Invalid mode".into()))?;
-
-        let mut args: [*const std::os::raw::c_char; 4] = [
-            cmd_name.as_ptr(),
-            val_c.as_ptr(),
-            mode_c.as_ptr(),
-            std::ptr::null(),
-        ];
-
-        let ret = unsafe { libmpv_sys::mpv_command(self.ctx, args.as_mut_ptr()) };
-        if ret < 0 {
-            let err = unsafe { CStr::from_ptr(libmpv_sys::mpv_error_string(ret)).to_string_lossy().into_owned() };
-            return Err(YPlayerError::Mpv(format!("seek: {err}")));
-        }
-        Ok(())
+        self.command(&["seek", &format!("{rel}{secs}"), "relative"])
     }
 
     pub fn duration(&self) -> Option<f64> {
@@ -194,14 +160,17 @@ impl Drop for MpvPlayer {
     }
 }
 
+fn error_string(ret: i32) -> String {
+    unsafe { CStr::from_ptr(libmpv_sys::mpv_error_string(ret)).to_string_lossy().into_owned() }
+}
+
 fn set_opt(ctx: *mut libmpv_sys::mpv_handle, name: &str, val: &str) -> Result<()> {
     let name_c = CString::new(name).map_err(|_| YPlayerError::Mpv("Invalid option name".into()))?;
     let val_c = CString::new(val).map_err(|_| YPlayerError::Mpv("Invalid option value".into()))?;
 
     let ret = unsafe { libmpv_sys::mpv_set_option_string(ctx, name_c.as_ptr(), val_c.as_ptr()) };
     if ret < 0 {
-        let err = unsafe { CStr::from_ptr(libmpv_sys::mpv_error_string(ret)).to_string_lossy().into_owned() };
-        return Err(YPlayerError::Mpv(format!("set_option '{name}': {err}")));
+        return Err(YPlayerError::Mpv(format!("set_option '{name}': {}", error_string(ret))));
     }
     Ok(())
 }
@@ -220,8 +189,7 @@ fn set_flag(ctx: *mut libmpv_sys::mpv_handle, name: &str, val: bool) -> Result<(
         )
     };
     if ret < 0 {
-        let err = unsafe { CStr::from_ptr(libmpv_sys::mpv_error_string(ret)).to_string_lossy().into_owned() };
-        return Err(YPlayerError::Mpv(format!("set_flag '{name}': {err}")));
+        return Err(YPlayerError::Mpv(format!("set_flag '{name}': {}", error_string(ret))));
     }
     Ok(())
 }

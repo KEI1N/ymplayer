@@ -1,5 +1,6 @@
 use crate::api::models::{LibraryView, YTrack, YPlaylist};
 use crate::app::state::{AppState, Focus};
+use crate::ui::components::list::{row_prefix, row_style, track_line};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
@@ -20,12 +21,9 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, app: &mut AppState) {
         let icon = v.icon();
         let name = v.name();
         let active = app.library_view == *v;
-        let prefix = if active { "▸ " } else { "  " };
+        let prefix = row_prefix(active);
         let style = if focused && app.sidebar_selected == i {
-            Style::default()
-                .fg(Color::Rgb(220, 220, 220))
-                .bg(Color::Rgb(60, 60, 120))
-                .add_modifier(Modifier::BOLD)
+            row_style(true)
         } else if active {
             Style::default().fg(Color::Rgb(100, 180, 255)).add_modifier(Modifier::BOLD)
         } else {
@@ -61,26 +59,7 @@ fn draw_track_list(frame: &mut Frame, area: Rect, tracks: &[YTrack], title: &str
     let mut lines = vec![Line::from(format!(" {} ({} треков)", title, tracks.len()))
         .style(Style::default().add_modifier(Modifier::BOLD))];
     for (i, t) in tracks.iter().enumerate() {
-        let prefix = if i == selected { "▸ " } else { "  " };
-        let style = if focused && i == selected {
-            Style::default()
-                .fg(Color::Rgb(220, 220, 220))
-                .bg(Color::Rgb(60, 60, 120))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        lines.push(
-            Line::from(format!(
-                "{}{:>3}. {} — {} [{}]",
-                prefix,
-                i + 1,
-                t.artists_str(),
-                t.title,
-                t.duration_str()
-            ))
-            .style(style),
-        );
+        lines.push(track_line(i, t, i == selected, focused));
     }
     let title_line = if focused { "► Содержимое" } else { "  Содержимое" };
     let p = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title_line));
@@ -91,18 +70,9 @@ fn draw_playlist_list(frame: &mut Frame, area: Rect, playlists: &[YPlaylist], ti
     let mut lines = vec![Line::from(format!(" {} ({} плейлистов)", title, playlists.len()))
         .style(Style::default().add_modifier(Modifier::BOLD))];
     for (i, pl) in playlists.iter().enumerate() {
-        let prefix = if i == selected { "▸ " } else { "  " };
-        let style = if focused && i == selected {
-            Style::default()
-                .fg(Color::Rgb(220, 220, 220))
-                .bg(Color::Rgb(60, 60, 120))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
         lines.push(
-            Line::from(format!("{}{:>3}. {} — {} тр.", prefix, i + 1, pl.title, pl.track_count))
-                .style(style),
+            Line::from(format!("{}{:>3}. {} — {} тр.", row_prefix(i == selected), i + 1, pl.title, pl.track_count))
+                .style(row_style(focused && i == selected)),
         );
     }
     let title_line = if focused { "► Содержимое" } else { "  Содержимое" };
