@@ -98,27 +98,24 @@ impl YandexClient {
 
     // ── Liked Tracks ──
 
-    pub async fn get_liked_tracks(&self, page: u32, page_size: u32) -> Result<Vec<YTrack>> {
+    /// Ids of all liked tracks, newest first. The full objects are heavy,
+    /// so callers resolve them in chunks via get_tracks_batch.
+    pub async fn get_liked_track_ids(&self) -> Result<Vec<String>> {
         let uid = self.user_id()?;
-        let resp: serde_json::Value = self.get(
-            &format!("users/{uid}/likes/tracks?page={page}&pageSize={page_size}")
-        ).await?;
+        let resp: serde_json::Value = self.get(&format!("users/{uid}/likes/tracks")).await?;
 
-        let ids: Vec<String> = resp["library"]["tracks"]
+        Ok(resp["library"]["tracks"]
             .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| t["id"].as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+            .map(|arr| arr.iter().filter_map(|t| parse_id(&t["id"])).collect())
+            .unwrap_or_default())
+    }
 
+    /// Resolve a chunk of liked-track ids into full tracks.
+    pub async fn get_liked_tracks_chunk(&self, ids: &[String]) -> Result<Vec<YTrack>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-
-        let mut tracks = self.get_tracks_batch(&ids).await?;
-        // Mark all as liked
+        let mut tracks = self.get_tracks_batch(ids).await?;
         for t in &mut tracks {
             t.liked = true;
         }

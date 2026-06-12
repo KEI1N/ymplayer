@@ -35,8 +35,8 @@ pub struct AppState {
     pub search_seq: u64,
     pub selected_index: usize,
     pub sidebar_selected: usize,
-    pub scroll_offset: usize,
     pub now_playing_scroll: usize,
+    pub show_help: bool,
 }
 
 impl Default for AppState {
@@ -56,8 +56,8 @@ impl Default for AppState {
             search_seq: 0,
             selected_index: 0,
             sidebar_selected: 0,
-            scroll_offset: 0,
             now_playing_scroll: 0,
+            show_help: false,
         }
     }
 }
@@ -84,11 +84,4 @@ impl AppState {
         }
     }
 
-    /// Upper bound for scroll_offset on the current screen.
-    pub fn max_scroll(&self) -> usize {
-        match &self.screen {
-            Screen::PlaylistDetail(pl) => pl.tracks.len().saturating_sub(1),
-            _ => 0,
-        }
-    }
 }

@@ -68,6 +68,8 @@ impl Action {
             KeyCode::Char('h') if vim_keys => Some(Action::Left),
             KeyCode::Char('l') if vim_keys => Some(Action::Right),
             KeyCode::Char('/') => Some(Action::Search),
+            KeyCode::Char(',') => Some(Action::SeekBackward),
+            KeyCode::Char('.') => Some(Action::SeekForward),
             KeyCode::Char(' ') => Some(Action::PlayPause),
             KeyCode::Char('?') => Some(Action::Help),
             KeyCode::Char('+') => Some(Action::VolumeUp),
@@ -79,6 +81,23 @@ impl Action {
             KeyCode::Char('z' | 'L') => Some(Action::NowPlaying),
             KeyCode::Char('a') => Some(Action::PlayAll),
             KeyCode::F(1) => Some(Action::Help),
+            KeyCode::Char(c) => Some(Action::Char(c)),
+            _ => None,
+        }
+    }
+
+    /// Key mapping for text input (search): printable characters go into
+    /// the query instead of being intercepted as player commands.
+    pub fn from_key_text_input(key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => Some(Action::Quit),
+            KeyCode::Esc => Some(Action::Escape),
+            KeyCode::Enter => Some(Action::Enter),
+            KeyCode::Backspace => Some(Action::GoBack),
+            KeyCode::Up => Some(Action::Up),
+            KeyCode::Down => Some(Action::Down),
+            KeyCode::PageUp => Some(Action::PageUp),
+            KeyCode::PageDown => Some(Action::PageDown),
             KeyCode::Char(c) => Some(Action::Char(c)),
             _ => None,
         }

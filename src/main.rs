@@ -37,22 +37,50 @@ async fn main() -> Result<()> {
     let player = Player::new(&token)?;
     let mut app = AppState::new();
 
-    let (liked, playlists) = tokio::join!(client.get_liked_tracks(0, 50), client.get_playlists());
-    match liked {
-        Ok(tracks) => app.liked_tracks = tracks,
-        Err(e) => eprintln!("Ошибка загрузки: {e}"),
-    }
-    match playlists {
-        Ok(playlists) => app.playlists = playlists,
-        Err(e) => eprintln!("Ошибка загрузки плейлистов: {e}"),
-    }
-
     // Search responses arrive here from spawned tasks, tagged with the
     // request generation so stale responses can be dropped.
     let (search_tx, mut search_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Vec<YTrack>)>();
     // Listening history is fetched once, in the background, on first entry
     // into the History view.
     let (history_tx, mut history_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<YTrack>>();
+    // Liked tracks beyond the first page stream in chunk by chunk.
+    let (liked_tx, mut liked_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<YTrack>>();
+
+    const LIKED_PAGE: usize = 50;
+    let (liked_ids, playlists) = tokio::join!(client.get_liked_track_ids(), client.get_playlists());
+    match playlists {
+        Ok(playlists) => app.playlists = playlists,
+        Err(e) => eprintln!("Ошибка загрузки плейлистов: {e}"),
+    }
+    match liked_ids {
+        Ok(ids) => {
+            // First page synchronously so the library isn't empty on the
+            // first frame; the rest streams in via liked_rx.
+            let (first, rest) = ids.split_at(ids.len().min(LIKED_PAGE));
+            match client.get_liked_tracks_chunk(first).await {
+                Ok(tracks) => app.liked_tracks = tracks,
+                Err(e) => eprintln!("Ошибка загрузки: {e}"),
+            }
+            if !rest.is_empty() {
+                let rest = rest.to_vec();
+                let client = client.clone();
+                let tx = liked_tx.clone();
+                tokio::spawn(async move {
+                    for chunk in rest.chunks(LIKED_PAGE) {
+                        match client.get_liked_tracks_chunk(chunk).await {
+                            Ok(tracks) => {
+                                if tx.send(tracks).is_err() {
+                                    return;
+                                }
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                });
+            }
+        }
+        Err(e) => eprintln!("Ошибка загрузки: {e}"),
+    }
 
     let mut events = EventStream::new();
     let tick_rate = tokio::time::Duration::from_millis(500);
@@ -84,7 +112,14 @@ async fn main() -> Result<()> {
             event = events.next() => {
                 match event {
                     Some(Ok(Event::Key(key))) => {
-                        if let Some(action) = Action::from_key(key, true) {
+                        // In search mode printable keys are query input,
+                        // not player commands.
+                        let action = if app.screen == Screen::Search {
+                            Action::from_key_text_input(key)
+                        } else {
+                            Action::from_key(key, true)
+                        };
+                        if let Some(action) = action {
                             if handle_action(&mut app, &player, &client, &config, &search_tx, &history_tx, action).await? == false {
                                 break;
                             }
@@ -109,6 +144,10 @@ async fn main() -> Result<()> {
             Some(tracks) = history_rx.recv() => {
                 app.history = tracks;
                 app.history_loaded = true;
+                needs_redraw = true;
+            }
+            Some(tracks) = liked_rx.recv() => {
+                app.liked_tracks.extend(tracks);
                 needs_redraw = true;
             }
             _ = ticker.tick() => {
@@ -168,6 +207,28 @@ async fn authenticate(config: &Config) -> Result<(YandexClient, String)> {
     Ok((client, token))
 }
 
+/// Move the cursor by `delta`, clamped to the list shown on the current
+/// screen; the views scroll to follow the cursor at draw time.
+fn move_selection(app: &mut AppState, delta: isize) {
+    let len = match &app.screen {
+        Screen::PlaylistDetail(pl) => pl.tracks.len(),
+        Screen::Search => app.search_results.len(),
+        Screen::Library => match app.focus {
+            Focus::Sidebar => LibraryView::all().len(),
+            Focus::Content => app.content_len(),
+        },
+        _ => 0,
+    };
+    let sidebar = matches!(app.screen, Screen::Library) && app.focus == Focus::Sidebar;
+    let target = if sidebar { &mut app.sidebar_selected } else { &mut app.selected_index };
+    if len == 0 {
+        *target = 0;
+        return;
+    }
+    let cur = (*target).min(len - 1) as isize;
+    *target = (cur + delta).clamp(0, len as isize - 1) as usize;
+}
+
 /// Kick off a one-time background fetch of listening history when the
 /// History view becomes active; the result arrives via `history_tx`.
 fn maybe_load_history(
@@ -195,9 +256,19 @@ async fn handle_action(
     history_tx: &tokio::sync::mpsc::UnboundedSender<Vec<YTrack>>,
     action: Action,
 ) -> Result<bool> {
+    // ── Help overlay swallows everything until closed ──
+    if app.show_help {
+        match action {
+            Action::Help | Action::Escape | Action::GoBack | Action::Quit => app.show_help = false,
+            _ => {}
+        }
+        return Ok(true);
+    }
+
     // ── Search mode: capture input ──
     if matches!(app.screen, Screen::Search) {
         match action {
+            Action::Quit => return Ok(false),
             Action::Escape => {
                 app.screen = Screen::Library;
                 app.search_query.clear();
@@ -241,11 +312,16 @@ async fn handle_action(
                 }
                 return Ok(true);
             }
+            Action::PageUp => {
+                move_selection(app, -10);
+                return Ok(true);
+            }
+            Action::PageDown => {
+                move_selection(app, 10);
+                return Ok(true);
+            }
             Action::Char(c) => {
                 app.search_query.push(c);
-            }
-            Action::Search => {
-                app.search_query.push('/');
             }
             _ => return Ok(true),
         }
@@ -383,7 +459,6 @@ async fn handle_action(
                                         app.current_playlist = Some(pl.clone());
                                         app.screen = Screen::PlaylistDetail(pl);
                                         app.selected_index = 0;
-                                        app.scroll_offset = 0;
                                     }
                                 }
                                 _ => {
@@ -512,20 +587,16 @@ async fn handle_action(
             }
         }
 
-        Action::ScrollDown => {
-            app.scroll_offset = (app.scroll_offset + 1).min(app.max_scroll());
+        Action::Help => {
+            app.show_help = true;
         }
 
-        Action::ScrollUp => {
-            app.scroll_offset = app.scroll_offset.saturating_sub(1);
+        Action::ScrollDown | Action::PageDown => {
+            move_selection(app, 10);
         }
 
-        Action::PageDown => {
-            app.scroll_offset = (app.scroll_offset + 10).min(app.max_scroll());
-        }
-
-        Action::PageUp => {
-            app.scroll_offset = app.scroll_offset.saturating_sub(10);
+        Action::ScrollUp | Action::PageUp => {
+            move_selection(app, -10);
         }
 
         _ => {}
