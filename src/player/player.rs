@@ -106,6 +106,11 @@ impl Player {
         self.cache.clear()
     }
 
+    /// Whether the track is already downloaded to the local cache.
+    pub fn is_cached(&self, track_id: &str) -> bool {
+        self.cache.has(track_id)
+    }
+
     pub fn toggle_playback(&self) -> Result<bool> {
         self.mpv.toggle_playback()
     }

@@ -24,6 +24,10 @@ pub struct AppState {
     pub library_view: LibraryView,
     pub liked_tracks: Vec<YTrack>,
     pub playlists: Vec<YPlaylist>,
+    pub history: Vec<YTrack>,
+    /// История загружается лениво при первом входе во вкладку.
+    pub history_loaded: bool,
+    pub history_loading: bool,
     pub current_playlist: Option<YPlaylist>,
     pub search_query: String,
     pub search_results: Vec<YTrack>,
@@ -31,8 +35,8 @@ pub struct AppState {
     pub search_seq: u64,
     pub selected_index: usize,
     pub sidebar_selected: usize,
-    pub scroll_offset: usize,
     pub now_playing_scroll: usize,
+    pub show_help: bool,
 }
 
 impl Default for AppState {
@@ -43,14 +47,17 @@ impl Default for AppState {
             library_view: LibraryView::LikedTracks,
             liked_tracks: vec![],
             playlists: vec![],
+            history: vec![],
+            history_loaded: false,
+            history_loading: false,
             current_playlist: None,
             search_query: String::new(),
             search_results: vec![],
             search_seq: 0,
             selected_index: 0,
             sidebar_selected: 0,
-            scroll_offset: 0,
             now_playing_scroll: 0,
+            show_help: false,
         }
     }
 }
@@ -64,7 +71,7 @@ impl AppState {
         match self.library_view {
             LibraryView::LikedTracks => &self.liked_tracks,
             LibraryView::Playlists => self.current_playlist.as_ref().map(|p| p.tracks.as_slice()).unwrap_or(&[]),
-            _ => &[],
+            LibraryView::History => &self.history,
         }
     }
 
@@ -77,11 +84,4 @@ impl AppState {
         }
     }
 
-    /// Upper bound for scroll_offset on the current screen.
-    pub fn max_scroll(&self) -> usize {
-        match &self.screen {
-            Screen::PlaylistDetail(pl) => pl.tracks.len().saturating_sub(1),
-            _ => 0,
-        }
-    }
 }

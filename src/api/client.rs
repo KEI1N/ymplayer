@@ -98,27 +98,24 @@ impl YandexClient {
 
     // ── Liked Tracks ──
 
-    pub async fn get_liked_tracks(&self, page: u32, page_size: u32) -> Result<Vec<YTrack>> {
+    /// Ids of all liked tracks, newest first. The full objects are heavy,
+    /// so callers resolve them in chunks via get_tracks_batch.
+    pub async fn get_liked_track_ids(&self) -> Result<Vec<String>> {
         let uid = self.user_id()?;
-        let resp: serde_json::Value = self.get(
-            &format!("users/{uid}/likes/tracks?page={page}&pageSize={page_size}")
-        ).await?;
+        let resp: serde_json::Value = self.get(&format!("users/{uid}/likes/tracks")).await?;
 
-        let ids: Vec<String> = resp["library"]["tracks"]
+        Ok(resp["library"]["tracks"]
             .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| t["id"].as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+            .map(|arr| arr.iter().filter_map(|t| parse_id(&t["id"])).collect())
+            .unwrap_or_default())
+    }
 
+    /// Resolve a chunk of liked-track ids into full tracks.
+    pub async fn get_liked_tracks_chunk(&self, ids: &[String]) -> Result<Vec<YTrack>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-
-        let mut tracks = self.get_tracks_batch(&ids).await?;
-        // Mark all as liked
+        let mut tracks = self.get_tracks_batch(ids).await?;
         for t in &mut tracks {
             t.liked = true;
         }
@@ -139,29 +136,7 @@ impl YandexClient {
             &format!("users/{uid}/playlists/list")
         ).await?;
 
-        Ok(playlists.into_iter().filter_map(|p| {
-            let pl_id = p["playlist_id"].as_str()
-                .map(String::from)
-                .or_else(|| p["kind"].as_i64().map(|k| k.to_string()))
-                .unwrap_or_default();
-            Some(YPlaylist {
-                id: pl_id,
-                kind: p["kind"].as_i64().unwrap_or(0),
-                title: p["title"].as_str()?.to_string(),
-                owner_name: p["owner"]["name"].as_str()
-                    .or_else(|| p["owner"]["login"].as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                track_count: p["track_count"].as_u64().unwrap_or(0) as u32,
-                cover_uri: p["cover"]["uri"].as_str()
-                    .or_else(|| p["og_image"].as_str())
-                    .map(String::from),
-                description: p["description"].as_str().map(String::from),
-                duration_ms: p["duration_ms"].as_u64().unwrap_or(0) as u32,
-                liked: false,
-                tracks: vec![],
-            })
-        }).collect())
+        Ok(playlists.into_iter().filter_map(|p| parse_playlist(&p)).collect())
     }
 
     pub async fn get_playlist_tracks(&self, kind: i64) -> Result<Vec<YTrack>> {
@@ -203,8 +178,8 @@ impl YandexClient {
             id: parse_id(&resp["id"]).unwrap_or_default(),
             title: resp["title"].as_str().unwrap_or("").to_string(),
             artists: parse_artists(resp["artists"].as_array()),
-            cover_uri: resp["cover_uri"].as_str().map(String::from),
-            track_count: resp["track_count"].as_u64().unwrap_or(0) as u32,
+            cover_uri: jfield(&resp, "coverUri", "cover_uri").as_str().map(String::from),
+            track_count: jfield(&resp, "trackCount", "track_count").as_u64().unwrap_or(0) as u32,
             year: resp["year"].as_u64().map(|y| y as u32),
             genre: resp["genre"].as_str().map(String::from),
             liked: resp["liked"].as_bool().unwrap_or(false),
@@ -227,6 +202,38 @@ impl YandexClient {
         Ok(tracks)
     }
 
+    // ── Listening history ──
+
+    /// Recently played tracks, newest first, up to `limit`.
+    /// GET /music-history returns days (historyTabs) of play groups; full
+    /// track objects are then fetched in one batch by their ids.
+    pub async fn get_history(&self, limit: usize) -> Result<Vec<YTrack>> {
+        let resp: serde_json::Value = self.get("music-history?fullModelsCount=0").await?;
+
+        let empty = vec![];
+        let mut ids: Vec<String> = Vec::new();
+        'outer: for tab in jfield(&resp, "historyTabs", "history_tabs").as_array().unwrap_or(&empty) {
+            for group in tab["items"].as_array().unwrap_or(&empty) {
+                for item in group["tracks"].as_array().unwrap_or(&empty) {
+                    let item_id = jfield(&item["data"], "itemId", "item_id");
+                    if let Some(id) = parse_id(jfield(item_id, "trackId", "track_id")) {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                            if ids.len() >= limit {
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        self.get_tracks_batch(&ids).await
+    }
+
     // ── Search ──
 
     pub async fn search(&self, query: &str, search_type: &str, page: u32) -> Result<YSearchResult> {
@@ -246,8 +253,8 @@ impl YandexClient {
                         id: parse_id(&a["id"]).unwrap_or_default(),
                         title: a["title"].as_str()?.to_string(),
                         artists: parse_artists(a["artists"].as_array()),
-                        cover_uri: a["cover_uri"].as_str().map(String::from),
-                        track_count: a["track_count"].as_u64().unwrap_or(0) as u32,
+                        cover_uri: jfield(a, "coverUri", "cover_uri").as_str().map(String::from),
+                        track_count: jfield(a, "trackCount", "track_count").as_u64().unwrap_or(0) as u32,
                         year: a["year"].as_u64().map(|y| y as u32),
                         genre: a["genre"].as_str().map(String::from),
                         liked: false,
@@ -255,24 +262,7 @@ impl YandexClient {
                     })
                 }).collect()).unwrap_or_default(),
             playlists: resp["playlists"]["results"]
-                .as_array().map(|a| a.iter().filter_map(|p| {
-                    let pl_id = p["playlist_id"].as_str()
-                        .map(String::from)
-                        .or_else(|| p["kind"].as_i64().map(|k| k.to_string()))
-                        .unwrap_or_default();
-                    Some(YPlaylist {
-                        id: pl_id,
-                        kind: p["kind"].as_i64().unwrap_or(0),
-                        title: p["title"].as_str()?.to_string(),
-                        owner_name: p["owner"]["name"].as_str().unwrap_or("").to_string(),
-                        track_count: p["track_count"].as_u64().unwrap_or(0) as u32,
-                        cover_uri: p["cover"]["uri"].as_str().map(String::from),
-                        description: p["description"].as_str().map(String::from),
-                        duration_ms: p["duration_ms"].as_u64().unwrap_or(0) as u32,
-                        liked: false,
-                        tracks: vec![],
-                    })
-                }).collect()).unwrap_or_default(),
+                .as_array().map(|a| a.iter().filter_map(parse_playlist).collect()).unwrap_or_default(),
         })
     }
 
@@ -417,6 +407,13 @@ impl YandexClient {
     }
 }
 
+/// The API returns camelCase keys ("durationMs"); some older payloads use
+/// snake_case. Prefer camelCase, fall back to snake_case.
+fn jfield<'a>(v: &'a serde_json::Value, camel: &str, snake: &str) -> &'a serde_json::Value {
+    let c = &v[camel];
+    if c.is_null() { &v[snake] } else { c }
+}
+
 /// Yandex ids arrive either as numbers or strings depending on endpoint.
 fn parse_id(v: &serde_json::Value) -> Option<String> {
     v.as_i64()
@@ -424,22 +421,48 @@ fn parse_id(v: &serde_json::Value) -> Option<String> {
         .or_else(|| v.as_str().map(String::from))
 }
 
+fn parse_playlist(p: &serde_json::Value) -> Option<YPlaylist> {
+    let id = jfield(p, "playlistUuid", "playlist_id").as_str()
+        .map(String::from)
+        .or_else(|| p["kind"].as_i64().map(|k| k.to_string()))
+        .unwrap_or_default();
+    Some(YPlaylist {
+        id,
+        kind: p["kind"].as_i64().unwrap_or(0),
+        title: p["title"].as_str()?.to_string(),
+        owner_name: p["owner"]["name"].as_str()
+            .or_else(|| p["owner"]["login"].as_str())
+            .unwrap_or("")
+            .to_string(),
+        track_count: jfield(p, "trackCount", "track_count").as_u64().unwrap_or(0) as u32,
+        cover_uri: p["cover"]["uri"].as_str()
+            .or_else(|| jfield(p, "ogImage", "og_image").as_str())
+            .map(String::from),
+        description: p["description"].as_str().map(String::from),
+        duration_ms: jfield(p, "durationMs", "duration_ms").as_u64().unwrap_or(0) as u32,
+        liked: false,
+        tracks: vec![],
+    })
+}
+
 fn parse_track(t: &serde_json::Value, liked: bool, position: Option<u64>) -> Option<YTrack> {
     // A track without an id can't be downloaded or cached — skip it.
     let id = parse_id(&t["id"])?;
+    let lyrics_info = jfield(t, "lyricsInfo", "lyrics_info");
     Some(YTrack {
         id,
         title: t["title"].as_str()?.to_string(),
         artists: parse_artists(t["artists"].as_array()),
         albums: t["albums"].as_array().map(|a| a.iter().filter_map(parse_album).collect()).unwrap_or_default(),
-        duration_ms: t["duration_ms"].as_u64().unwrap_or(0) as u32,
-        cover_uri: t["cover_uri"].as_str()
-            .or_else(|| t["albums"].as_array().and_then(|a| a.first()).and_then(|a| a["cover_uri"].as_str()))
+        duration_ms: jfield(t, "durationMs", "duration_ms").as_u64().unwrap_or(0) as u32,
+        cover_uri: jfield(t, "coverUri", "cover_uri").as_str()
+            .or_else(|| t["albums"].as_array().and_then(|a| a.first()).and_then(|a| jfield(a, "coverUri", "cover_uri").as_str()))
             .map(String::from),
-        lyrics_available: t["lyrics_info"]["has_visible_lyrics"].as_bool().unwrap_or(false)
-            || t["lyrics_info"]["has_lyrics"].as_bool().unwrap_or(false),
+        lyrics_available: jfield(t, "lyricsAvailable", "lyrics_available").as_bool().unwrap_or(false)
+            || jfield(lyrics_info, "hasAvailableTextLyrics", "has_visible_lyrics").as_bool().unwrap_or(false)
+            || jfield(lyrics_info, "hasAvailableSyncLyrics", "has_lyrics").as_bool().unwrap_or(false),
         explicit: t["explicit"].as_bool().unwrap_or(false),
-        track_position: position.or_else(|| t["track_position"].as_u64()).or_else(|| t["index"].as_u64()).map(|i| i as u32),
+        track_position: position.or_else(|| jfield(t, "trackPosition", "track_position").as_u64()).or_else(|| t["index"].as_u64()).map(|i| i as u32),
         liked,
     })
 }
@@ -460,8 +483,12 @@ fn parse_artist(a: &serde_json::Value) -> Option<YArtist> {
         genres: a["genres"].as_array().map(|g| {
             g.iter().filter_map(|g| g.as_str().map(String::from)).collect()
         }).unwrap_or_default(),
-        tracks_count: a["tracks_count"].as_u64().map(|u| u as u32),
-        albums_count: a["albums_count"].as_u64().map(|u| u as u32),
+        tracks_count: a["counts"]["tracks"].as_u64()
+            .or_else(|| jfield(a, "tracksCount", "tracks_count").as_u64())
+            .map(|u| u as u32),
+        albums_count: a["counts"]["directAlbums"].as_u64()
+            .or_else(|| jfield(a, "albumsCount", "albums_count").as_u64())
+            .map(|u| u as u32),
         liked: false,
     })
 }
@@ -471,8 +498,8 @@ fn parse_album(a: &serde_json::Value) -> Option<YAlbum> {
         id: parse_id(&a["id"]).unwrap_or_default(),
         title: a["title"].as_str()?.to_string(),
         artists: parse_artists(a["artists"].as_array()),
-        cover_uri: a["cover_uri"].as_str().map(String::from),
-        track_count: a["track_count"].as_u64().unwrap_or(0) as u32,
+        cover_uri: jfield(a, "coverUri", "cover_uri").as_str().map(String::from),
+        track_count: jfield(a, "trackCount", "track_count").as_u64().unwrap_or(0) as u32,
         year: a["year"].as_u64().map(|y| y as u32),
         genre: a["genre"].as_str().map(String::from),
         liked: false,
