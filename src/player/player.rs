@@ -13,7 +13,6 @@ pub struct Player {
     cache: TrackCache,
     current_track: Mutex<Option<YTrack>>,
     pending_next: Mutex<bool>,
-    suppress_next_end_file: Mutex<bool>,
 }
 
 impl Player {
@@ -26,7 +25,6 @@ impl Player {
             queue: Mutex::new(PlaybackQueue::new()),
             current_track: Mutex::new(None),
             pending_next: Mutex::new(false),
-            suppress_next_end_file: Mutex::new(false),
         })
     }
 
@@ -57,24 +55,12 @@ impl Player {
     }
 
     pub fn play_track(&self, track: YTrack, url: &str) -> Result<()> {
-        self.set_suppress_next_end_file(true);
         self.mpv.load(url)?;
         self.mpv.play()?;
-        self.mpv.drain_events();
         self.clear_pending_next();
         self.sync_queue_current(&track.id);
         *self.current_track.lock().map_err(|e| crate::utils::YPlayerError::InvalidState(e.to_string()))? = Some(track);
         Ok(())
-    }
-
-    fn set_suppress_next_end_file(&self, val: bool) {
-        if let Ok(mut v) = self.suppress_next_end_file.lock() {
-            *v = val;
-        }
-    }
-
-    fn take_suppress_next_end_file(&self) -> bool {
-        self.suppress_next_end_file.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or(false)
     }
 
     fn sync_queue_current(&self, track_id: &str) {
@@ -189,12 +175,9 @@ impl Player {
     }
 
     pub fn poll_events(&self) {
-        use libmpv_sys::mpv_event_id_MPV_EVENT_END_FILE;
+        use crate::player::mpv::MpvEvent;
         while let Some(event) = self.mpv.poll_event() {
-            if event == mpv_event_id_MPV_EVENT_END_FILE as i64 {
-                if self.take_suppress_next_end_file() {
-                    continue;
-                }
+            if matches!(event, MpvEvent::EndOfFile) {
                 if let Ok(mut v) = self.pending_next.lock() {
                     *v = true;
                 }

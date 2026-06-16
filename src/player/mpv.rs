@@ -8,6 +8,14 @@ pub struct MpvPlayer {
     running: Arc<AtomicBool>,
 }
 
+/// An mpv event narrowed to what the player loop cares about.
+pub enum MpvEvent {
+    /// The current file finished playing on its own (reached EOF).
+    EndOfFile,
+    /// Any other event (load aborted, stopped, property change, ...).
+    Other,
+}
+
 unsafe impl Send for MpvPlayer {}
 unsafe impl Sync for MpvPlayer {}
 
@@ -123,14 +131,8 @@ impl MpvPlayer {
         get_flag(self.ctx, "eof-reached").unwrap_or(true)
     }
 
-    /// Drain all pending mpv events without processing them.
-    /// Use after loadfile replace to discard stale END_FILE events.
-    pub fn drain_events(&self) {
-        while self.poll_event().is_some() {}
-    }
-
-    /// Poll for mpv events - call this periodically
-    pub fn poll_event(&self) -> Option<i64> {
+    /// Poll for a single mpv event - call this periodically.
+    pub fn poll_event(&self) -> Option<MpvEvent> {
         unsafe {
             let event = libmpv_sys::mpv_wait_event(self.ctx, 0.0);
             if event.is_null() {
@@ -140,7 +142,17 @@ impl MpvPlayer {
             if event_id == libmpv_sys::mpv_event_id_MPV_EVENT_NONE as i64 {
                 return None;
             }
-            Some(event_id)
+            if event_id == libmpv_sys::mpv_event_id_MPV_EVENT_END_FILE as i64 {
+                // Only a natural end-of-file should advance the queue; the
+                // END_FILE that mpv emits when `loadfile replace` aborts the
+                // previous track carries reason STOP and must be ignored.
+                let ef = (*event).data as *const libmpv_sys::mpv_event_end_file;
+                let eof = !ef.is_null()
+                    && (*ef).reason
+                        == libmpv_sys::mpv_end_file_reason_MPV_END_FILE_REASON_EOF as i32;
+                return Some(if eof { MpvEvent::EndOfFile } else { MpvEvent::Other });
+            }
+            Some(MpvEvent::Other)
         }
     }
 
